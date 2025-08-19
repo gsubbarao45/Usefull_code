@@ -1,48 +1,41 @@
 
-import pandas as pd
-import io
-from services.data_curation_service import DataCurationService  # Adjust this import
-from services.blob_location import BlobLocation  # Adjust this import
-from utils.enums import StorageObjectType  # Adjust this import
+Fine‑Tuning Studio — One‑Page Overview
+Purpose
+This documentation is prepared for internal employees. If they are not familiar with the procedure, they can directly ask questions and our bot will automatically provide support and guidance. The Fine‑Tuning Studio pipeline enables document ingestion, text extraction, Q/A generation, fine‑tuning, and evaluation to ensure accurate and context‑aware answers.
+1) Document Ingestion & Text Extraction
+Input: PDF documents (multi‑layout, tables, images, stamps).
 
-def save_questions_to_blob(df: pd.DataFrame, filename: str) -> str:
-    """
-    Save DataFrame to Azure Blob and return the saved file path (as string).
-    """
+Steps:
+1. Ingest PDFs into a controlled workspace with lineage (source path, checksum, version).
+2. Page Rendering: Convert PDF pages to images (via pdfplumber) to preserve layout cues.
+3. Base64 Encoding: Transform images to Base64 for LLM transport.
+4. Extraction Prompting: Prompt + Base64 to LLM to extract text, tables, metadata.
+5. Post‑processing: Normalize text, remove headers/footers, repair encodings.
 
-    try:
-        # Required columns check
-        required_columns = ["Question Type", "Question", "Answer"]
-        for col in required_columns:
-            if col not in df.columns:
-                df[col] = ""
+Outputs: Clean structured text + JSON tables with lineage.
+2) Data Curation & Original Q/A Generation
+We create original Q/A exemplars across five types:
+- Factual (who/what/when/where)
+- Procedural (how‑to)
+- Conceptual (definitions)
+- Inferential (derive/summarize)
+- Reasoning‑based (multi‑hop)
 
-        # Handle date formatting (only for Question/Answer if they're actually dates)
-        for col in ["Question", "Answer"]:
-            df[col] = pd.to_datetime(df[col], format="%Y%m%d", errors="coerce").dt.strftime("%m-%d-%Y").fillna(df[col])
+Each item includes: question_type, context_ref, question, answer, citations.
+3) Synthetic Data via CoT (Data Curation)
+Expand dataset with Chain‑of‑Thought (CoT) prompting:
+- Diverse paraphrases & negatives
+- Step‑by‑step rationales
+- Filters for quality, dedupe, toxicity.
 
-        # Convert to CSV buffer
-        csv_buffer = io.StringIO()
-        df.to_csv(csv_buffer, index=False)
-
-        # Upload to Blob
-        blob_path = BlobLocation(container_name="pvt-markets", absolute_path=filename)
-        response = DataCurationService().upload_file_blob(
-            data=csv_buffer.getvalue(),
-            filename="evaluation_results.csv",
-            blobFilePath=blob_path,
-        )
-
-        # ✅ Extract and return string message
-        if isinstance(response, dict) and "storagePath" in response:
-            storage_obj = response["storagePath"]
-            if hasattr(storage_obj, "message"):
-                return storage_obj.message  # Safe for JSON
-            else:
-                return str(storage_obj)
-        return "Unknown blob path"
-
-    except Exception as e:
-        import logging
-        logging.error(f"Error saving questions to blob: {e}", exc_info=True)
-        return "Error"
+Outputs: Balanced Q/A sets with rationales.
+4) Fine‑Tuning
+Target Models: LLaMA‑8B‑Instruct, Mosaic‑8B, Mistral‑7B.
+Training: SFT with Q/A + CoT, LoRA/QLoRA adapters, curriculum learning.
+Artifacts: Model weights, tokenizer, templates, datasheets.
+5) Evaluation (LLM‑as‑Judge + Metrics)
+LLM‑as‑Judge: rubric‑based scoring for correctness, completeness, faithfulness.
+Metrics: EM/F1, ROUGE‑L, BLEU, METEOR, hallucination rate.
+Reports: Breakdown by Q/A type, confusion analysis, error exemplars.
+Lifecycle
+PDF → Images → Base64 → Extraction → Q/A → CoT synthetic → Fine‑tune → Evaluate 
